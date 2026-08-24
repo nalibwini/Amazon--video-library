@@ -13,7 +13,7 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Find and extract project ZIP
         id: prepare
@@ -21,15 +21,12 @@ jobs:
         run: |
           set -euo pipefail
 
-          ZIP_FILE="$(find . -maxdepth 1 -type f \( -iname '*.zip' \) -print -quit)"
+          ZIP_FILE="./Amazon_Video_Library_GitHub_Ready.zip"
 
-          if [ -z "$ZIP_FILE" ]; then
-            echo "ERROR: No ZIP file was found in the repository root."
-            echo "Upload the Amazon Video Library project as a .zip file and commit it."
+          if [ ! -f "$ZIP_FILE" ]; then
+            echo "ERROR: $ZIP_FILE was not found in the repository root."
             exit 1
           fi
-
-          echo "Using ZIP: $ZIP_FILE"
 
           rm -rf .build-source
           mkdir -p .build-source
@@ -40,39 +37,97 @@ jobs:
 
           if [ -z "$PROJECT_DIR" ]; then
             echo "ERROR: package.json was not found inside the ZIP."
-            echo "The ZIP must contain the complete Capacitor project."
             exit 1
           fi
 
           echo "Project directory: $PROJECT_DIR"
           echo "project_dir=$PROJECT_DIR" >> "$GITHUB_OUTPUT"
 
-          if [ ! -f "$PROJECT_DIR/capacitor.config.ts" ] && [ ! -f "$PROJECT_DIR/capacitor.config.json" ]; then
-            echo "ERROR: capacitor.config.ts or capacitor.config.json was not found."
+          if [ ! -f "$PROJECT_DIR/capacitor.config.ts" ] && \
+             [ ! -f "$PROJECT_DIR/capacitor.config.js" ] && \
+             [ ! -f "$PROJECT_DIR/capacitor.config.json" ]; then
+            echo "ERROR: No Capacitor configuration file was found."
             exit 1
           fi
 
           if [ ! -d "$PROJECT_DIR/www" ]; then
             echo "WARNING: www/ directory was not found."
-            echo "The build may fail if the Capacitor web assets are missing."
           fi
 
       - name: Setup Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v5
         with:
-          node-version: 20
+          node-version: 22
           cache: npm
           cache-dependency-path: ${{ steps.prepare.outputs.project_dir }}/package.json
 
-      - name: Install dependencies
+      - name: Install project dependencies
         working-directory: ${{ steps.prepare.outputs.project_dir }}
         shell: bash
         run: |
           set -euo pipefail
 
           npm install
-          npm install -D typescript
-          npm install @capacitor/android
+          npm install --include=dev --save-dev typescript
+
+          if ! node -e "require.resolve('@capacitor/android')" >/dev/null 2>&1; then
+            echo "Capacitor Android package not found. Installing it..."
+            npm install @capacitor/android
+          fi
+
+          node -e "console.log('TypeScript:', require.resolve('typescript'))"
+          node -e "console.log('Capacitor CLI:', require.resolve('@capacitor/cli'))"
+          node -e "console.log('Capacitor Android:', require.resolve('@capacitor/android'))"
+
+      - name: Prepare Capacitor configuration
+        working-directory: ${{ steps.prepare.outputs.project_dir }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          if [ -f capacitor.config.ts ]; then
+            echo "Transpiling capacitor.config.ts to JavaScript..."
+
+            node <<'NODE'
+          const fs = require('fs');
+          const ts = require('typescript');
+
+          const input = fs.readFileSync('capacitor.config.ts', 'utf8');
+
+          const result = ts.transpileModule(input, {
+            compilerOptions: {
+              target: ts.ScriptTarget.ES2020,
+              module: ts.ModuleKind.CommonJS,
+              esModuleInterop: true,
+              moduleResolution: ts.ModuleResolutionKind.NodeJs
+            },
+            reportDiagnostics: true
+          });
+
+          if (result.diagnostics && result.diagnostics.length > 0) {
+            for (const diagnostic of result.diagnostics) {
+              console.error(
+                ts.flattenDiagnosticMessageText(
+                  diagnostic.messageText,
+                  '\n'
+                )
+              );
+            }
+
+            process.exit(1);
+          }
+
+          fs.writeFileSync(
+            'capacitor.config.js',
+            result.outputText
+          );
+          NODE
+
+            mv capacitor.config.ts capacitor.config.ts.original
+          fi
+
+          echo "Capacitor configuration prepared."
+          ls -la capacitor.config.*
 
       - name: Ensure Android platform exists
         working-directory: ${{ steps.prepare.outputs.project_dir }}
@@ -92,10 +147,11 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+
           npx cap sync android
 
       - name: Setup Java
-        uses: actions/setup-java@v4
+        uses: actions/setup-java@v5
         with:
           distribution: temurin
           java-version: 17
@@ -108,7 +164,8 @@ jobs:
           set -euo pipefail
 
           chmod +x gradlew
-          ./gradlew assembleDebug
+
+          ./gradlew assembleDebug --stacktrace
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
