@@ -30,8 +30,10 @@ jobs:
           fi
 
           echo "Using ZIP: $ZIP_FILE"
+
           rm -rf .build-source
           mkdir -p .build-source
+
           unzip -q "$ZIP_FILE" -d .build-source
 
           PROJECT_DIR="$(find .build-source -type f -name package.json -print -quit | xargs -r dirname)"
@@ -64,13 +66,20 @@ jobs:
 
       - name: Install dependencies
         working-directory: ${{ steps.prepare.outputs.project_dir }}
-        run: npm install
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          npm install
+          npm install -D typescript
+          npm install @capacitor/android
 
       - name: Ensure Android platform exists
         working-directory: ${{ steps.prepare.outputs.project_dir }}
         shell: bash
         run: |
           set -euo pipefail
+
           if [ ! -d android ]; then
             echo "Android platform not found. Creating it with Capacitor..."
             npx cap add android
@@ -80,7 +89,10 @@ jobs:
 
       - name: Sync Capacitor
         working-directory: ${{ steps.prepare.outputs.project_dir }}
-        run: npx cap sync android
+        shell: bash
+        run: |
+          set -euo pipefail
+          npx cap sync android
 
       - name: Setup Java
         uses: actions/setup-java@v4
@@ -94,6 +106,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+
           chmod +x gradlew
           ./gradlew assembleDebug
 
