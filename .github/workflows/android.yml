@@ -8,164 +8,177 @@ on:
 
 jobs:
   build:
-    name: Build Android APK from ZIP
+    name: Build Android APK
     runs-on: ubuntu-latest
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v5
+        uses: actions/checkout@v4
 
-      - name: Find and extract project ZIP
+      - name: Find project ZIP
+        id: find_zip
+        shell: bash
+        run: |
+          set -e
+
+          ZIP_FILE="Amazon_Video_Library_GitHub_Ready.zip"
+
+          if [ ! -f "$ZIP_FILE" ]; then
+            echo "ERROR: $ZIP_FILE haipo kwenye repository."
+            exit 1
+          fi
+
+          echo "ZIP imepatikana: $ZIP_FILE"
+
+      - name: Extract project
         id: prepare
         shell: bash
         run: |
-          set -euo pipefail
+          set -e
 
-          ZIP_FILE="./Amazon_Video_Library_GitHub_Ready.zip"
+          rm -rf build-source
+          mkdir -p build-source
 
-          if [ ! -f "$ZIP_FILE" ]; then
-            echo "ERROR: $ZIP_FILE was not found in the repository root."
-            exit 1
-          fi
+          unzip -q "Amazon_Video_Library_GitHub_Ready.zip" -d build-source
 
-          rm -rf .build-source
-          mkdir -p .build-source
-
-          unzip -q "$ZIP_FILE" -d .build-source
-
-          PROJECT_DIR="$(find .build-source -type f -name package.json -print -quit | xargs -r dirname)"
+          PROJECT_DIR=$(find build-source -type f -name "package.json" -print -quit | xargs -r dirname)
 
           if [ -z "$PROJECT_DIR" ]; then
-            echo "ERROR: package.json was not found inside the ZIP."
+            echo "ERROR: package.json haikupatikana ndani ya ZIP."
             exit 1
           fi
 
-          echo "Project directory: $PROJECT_DIR"
+          echo "PROJECT_DIR=$PROJECT_DIR"
+
           echo "project_dir=$PROJECT_DIR" >> "$GITHUB_OUTPUT"
 
-          if [ ! -f "$PROJECT_DIR/capacitor.config.ts" ] && \
-             [ ! -f "$PROJECT_DIR/capacitor.config.js" ] && \
-             [ ! -f "$PROJECT_DIR/capacitor.config.json" ]; then
-            echo "ERROR: No Capacitor configuration file was found."
-            exit 1
-          fi
-
-          if [ ! -d "$PROJECT_DIR/www" ]; then
-            echo "WARNING: www/ directory was not found."
-          fi
-
       - name: Setup Node.js
-        uses: actions/setup-node@v5
+        uses: actions/setup-node@v4
         with:
-          node-version: 22
+          node-version: 20
           cache: npm
-          cache-dependency-path: ${{ steps.prepare.outputs.project_dir }}/package.json
+          cache-dependency-path: ${{ steps.prepare.outputs.project_dir }}/package-lock.json
 
-      - name: Install project dependencies
+      - name: Install dependencies
         working-directory: ${{ steps.prepare.outputs.project_dir }}
         shell: bash
         run: |
-          set -euo pipefail
+          set -e
 
-          npm install
-          npm install --include=dev --save-dev typescript
+          if [ -f package-lock.json ]; then
+            npm ci
+          else
+            npm install
+          fi
+
+      - name: Check Capacitor
+        working-directory: ${{ steps.prepare.outputs.project_dir }}
+        shell: bash
+        run: |
+          set -e
+
+          if ! node -e "require.resolve('@capacitor/cli')" >/dev/null 2>&1; then
+            echo "Capacitor CLI haipo. Inawekwa..."
+            npm install --save-dev @capacitor/cli
+          fi
 
           if ! node -e "require.resolve('@capacitor/android')" >/dev/null 2>&1; then
-            echo "Capacitor Android package not found. Installing it..."
+            echo "Capacitor Android haipo. Inawekwa..."
             npm install @capacitor/android
           fi
 
-          node -e "console.log('TypeScript:', require.resolve('typescript'))"
-          node -e "console.log('Capacitor CLI:', require.resolve('@capacitor/cli'))"
-          node -e "console.log('Capacitor Android:', require.resolve('@capacitor/android'))"
+          echo "Capacitor iko tayari."
 
-      - name: Prepare Capacitor configuration
+      - name: Prepare Capacitor config
         working-directory: ${{ steps.prepare.outputs.project_dir }}
         shell: bash
         run: |
-          set -euo pipefail
+          set -e
 
           if [ -f capacitor.config.ts ]; then
-            echo "Transpiling capacitor.config.ts to JavaScript..."
+            echo "capacitor.config.ts imepatikana."
 
             node <<'NODE'
-          const fs = require('fs');
-          const ts = require('typescript');
+          const fs = require("fs");
+          const ts = require("typescript");
 
-          const input = fs.readFileSync('capacitor.config.ts', 'utf8');
+          const input = fs.readFileSync("capacitor.config.ts", "utf8");
 
           const result = ts.transpileModule(input, {
             compilerOptions: {
               target: ts.ScriptTarget.ES2020,
               module: ts.ModuleKind.CommonJS,
-              esModuleInterop: true,
-              moduleResolution: ts.ModuleResolutionKind.NodeJs
-            },
-            reportDiagnostics: true
+              esModuleInterop: true
+            }
           });
 
-          if (result.diagnostics && result.diagnostics.length > 0) {
-            for (const diagnostic of result.diagnostics) {
-              console.error(
-                ts.flattenDiagnosticMessageText(
-                  diagnostic.messageText,
-                  '\n'
-                )
-              );
-            }
-
-            process.exit(1);
-          }
-
           fs.writeFileSync(
-            'capacitor.config.js',
+            "capacitor.config.js",
             result.outputText
           );
           NODE
 
-            mv capacitor.config.ts capacitor.config.ts.original
+            mv capacitor.config.ts capacitor.config.ts.backup
           fi
 
-          echo "Capacitor configuration prepared."
-          ls -la capacitor.config.*
+          if [ ! -f capacitor.config.js ] && [ ! -f capacitor.config.json ]; then
+            echo "ERROR: Capacitor configuration haipo."
+            exit 1
+          fi
 
-      - name: Ensure Android platform exists
+      - name: Add Android platform
         working-directory: ${{ steps.prepare.outputs.project_dir }}
         shell: bash
         run: |
-          set -euo pipefail
+          set -e
 
           if [ ! -d android ]; then
-            echo "Android platform not found. Creating it with Capacitor..."
+            echo "Android platform haipo. Inaongezwa..."
             npx cap add android
           else
-            echo "Android platform already exists."
+            echo "Android platform tayari ipo."
           fi
 
       - name: Sync Capacitor
         working-directory: ${{ steps.prepare.outputs.project_dir }}
         shell: bash
         run: |
-          set -euo pipefail
+          set -e
 
           npx cap sync android
 
       - name: Setup Java
-        uses: actions/setup-java@v5
+        uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: 17
           cache: gradle
 
-      - name: Build Android APK
+      - name: Build APK
         working-directory: ${{ steps.prepare.outputs.project_dir }}/android
         shell: bash
         run: |
-          set -euo pipefail
+          set -e
 
           chmod +x gradlew
 
           ./gradlew assembleDebug --stacktrace
+
+      - name: Verify APK
+        working-directory: ${{ steps.prepare.outputs.project_dir }}
+        shell: bash
+        run: |
+          set -e
+
+          APK="android/app/build/outputs/apk/debug/app-debug.apk"
+
+          if [ ! -f "$APK" ]; then
+            echo "ERROR: APK haikutengenezwa."
+            exit 1
+          fi
+
+          echo "APK IMETENGENEZWA:"
+          ls -lh "$APK"
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
